@@ -19,14 +19,12 @@ import { Picker } from '@react-native-picker/picker';
 import { useRouter } from 'expo-router';
 import * as SecureStore from 'expo-secure-store';
 import * as ImagePicker from 'expo-image-picker';
-import * as FileSystem from 'expo-file-system';
 import MaterialCommunityIcons from 'react-native-vector-icons/MaterialCommunityIcons';
 import axios from 'axios';
 import DateTimePicker from '@react-native-community/datetimepicker';
 
 interface PickedImage {
-  localUri: string;     // path in the app's local storage
-  originalUri: string;  // path from camera's temp file
+  uri: string;
   width: number;
   height: number;
   type?: string;
@@ -34,6 +32,7 @@ interface PickedImage {
 }
 
 const { width } = Dimensions.get('window');
+
 
 const formatDate = (date: Date): string => {
   const day = date.getDate().toString().padStart(2, '0');
@@ -53,19 +52,16 @@ export default function HealthCenterFormModal() {
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [serialNumber, setSerialNumber] = useState('');
   const [mac, setMac] = useState('');
-
   const [modemFrontImage, setModemFrontImage] = useState<PickedImage | null>(null);
   const [modemBackImage, setModemBackImage] = useState<PickedImage | null>(null);
   const [speedTestImages, setSpeedTestImages] = useState<PickedImage[]>([]);
-
   const [loading, setLoading] = useState(false);
 
+  
   const [imageModalVisible, setImageModalVisible] = useState(false);
   const [selectedImageForModal, setSelectedImageForModal] = useState<PickedImage | null>(null);
 
-  // Directory path for storing images in this app
-  const localImagesDir = FileSystem.documentDirectory + 'healthCenterImages/';
-
+  
   useEffect(() => {
     (async () => {
       const { status: cameraStatus } = await ImagePicker.requestCameraPermissionsAsync();
@@ -76,10 +72,9 @@ export default function HealthCenterFormModal() {
       if (libraryStatus !== 'granted') {
         Alert.alert('Permission Denied', 'We need permission to access your media library!');
       }
-      // Create a local directory if not existing
-      await FileSystem.makeDirectoryAsync(localImagesDir, { intermediates: true }).catch(() => {});
     })();
   }, []);
+
 
   useEffect(() => {
     const backAction = () => {
@@ -109,22 +104,6 @@ export default function HealthCenterFormModal() {
     }
   };
 
-  const saveCapturedImageLocally = async (tempUri: string, fileName?: string) => {
-    try {
-      const newFileName = fileName || `capture_${Date.now()}.jpg`;
-      const destPath = localImagesDir + newFileName;
-      await FileSystem.moveAsync({
-        from: tempUri,
-        to: destPath,
-      });
-      return destPath;
-    } catch (err) {
-      console.error('Error saving image locally:', err);
-      Alert.alert('Error', 'Failed to save image locally.');
-      return null;
-    }
-  };
-
   const captureImage = async (
     setImage: React.Dispatch<React.SetStateAction<PickedImage | null>>
   ) => {
@@ -136,20 +115,14 @@ export default function HealthCenterFormModal() {
 
       if (!result.canceled && result.assets && result.assets.length > 0) {
         const { uri, width, height, type, fileName } = result.assets[0];
-        // Save the captured image from temp to local storage
-        const localPath = await saveCapturedImageLocally(uri, fileName);
-
-        if (localPath) {
-          const imageCaptured: PickedImage = {
-            localUri: localPath,
-            originalUri: uri,
-            width,
-            height,
-            type: type ?? 'image',
-            fileName: fileName ?? `capture_${Date.now()}.jpg`,
-          };
-          setImage(imageCaptured);
-        }
+        const imageCaptured: PickedImage = {
+          uri,
+          width,
+          height,
+          type: type ?? 'image',
+          fileName: fileName ?? `capture_${Date.now()}.jpg`,
+        };
+        setImage(imageCaptured);
       }
     } catch (error: any) {
       console.error('captureImage error:', error);
@@ -163,22 +136,15 @@ export default function HealthCenterFormModal() {
         mediaTypes: ImagePicker.MediaTypeOptions.Images,
         allowsMultipleSelection: true,
       });
-      if (!result.canceled && result.assets) {
-        const newImages: PickedImage[] = [];
-        for (let asset of result.assets) {
-          const localPath = await saveCapturedImageLocally(asset.uri, asset.fileName);
-          if (localPath) {
-            newImages.push({
-              localUri: localPath,
-              originalUri: asset.uri,
-              width: asset.width,
-              height: asset.height,
-              type: asset.type ?? 'image',
-              fileName: asset.fileName ?? `speed_test_${Date.now()}.jpg`,
-            });
-          }
-        }
-        setSpeedTestImages((prev) => [...prev, ...newImages]);
+      if (!result.canceled) {
+        const images = result.assets.map((asset) => ({
+          uri: asset.uri,
+          width: asset.width,
+          height: asset.height,
+          type: asset.type ?? 'image',
+          fileName: asset.fileName ?? `speed_test_${Date.now()}.jpg`,
+        }));
+        setSpeedTestImages((prev) => [...prev, ...images]);
       }
     } catch (error: any) {
       console.error('pickImages error:', error);
@@ -211,7 +177,6 @@ export default function HealthCenterFormModal() {
         return;
       }
 
-      // Construct form data
       const formData = new FormData();
       formData.append('barangay', barangay.trim());
       formData.append('tel_number', telephoneNumber.trim());
@@ -220,10 +185,9 @@ export default function HealthCenterFormModal() {
       formData.append('serial_number', serialNumber.trim());
       formData.append('mac', mac.trim());
 
-      // Attach images from local paths
       if (modemFrontImage) {
         formData.append('modemfront[]', {
-          uri: modemFrontImage.localUri,
+          uri: modemFrontImage.uri,
           type: 'image/jpeg',
           name: modemFrontImage.fileName ?? 'modem_front.jpg',
         } as any);
@@ -231,7 +195,7 @@ export default function HealthCenterFormModal() {
 
       if (modemBackImage) {
         formData.append('modemback[]', {
-          uri: modemBackImage.localUri,
+          uri: modemBackImage.uri,
           type: 'image/jpeg',
           name: modemBackImage.fileName ?? 'modem_back.jpg',
         } as any);
@@ -239,13 +203,12 @@ export default function HealthCenterFormModal() {
 
       speedTestImages.forEach((img, idx) => {
         formData.append('speedtest[]', {
-          uri: img.localUri,
+          uri: img.uri,
           type: 'image/jpeg',
           name: img.fileName ?? `speed_test_${idx}.jpg`,
         } as any);
       });
 
-      // POST to your server
       const response = await axios.post(
         'http://161.49.182.141:8008/PMS_Inventory/public/api/store-health-center',
         formData,
@@ -261,7 +224,7 @@ export default function HealthCenterFormModal() {
       if (response.status === 200 || response.status === 201) {
         Alert.alert('Success', 'Health center data successfully posted!');
         console.log('Server response:', response.data);
-        router.replace('/');
+        router.replace('/')
       } else {
         console.error('Error response:', response.data);
         Alert.alert('Error', 'An error occurred while submitting. Check logs.');
@@ -300,7 +263,6 @@ export default function HealthCenterFormModal() {
           <ScrollView contentContainerStyle={styles.scrollContainer}>
             <View style={styles.card}>
               <Text style={styles.cardTitle}>Basic Information</Text>
-              {/* Barangay Picker */}
               <View style={styles.inputGroup}>
                 <Text style={styles.label}>Barangay</Text>
                 <View style={styles.pickerContainer}>
@@ -322,7 +284,6 @@ export default function HealthCenterFormModal() {
                   </Picker>
                 </View>
               </View>
-              {/* Telephone */}
               <View style={styles.inputGroup}>
                 <Text style={styles.label}>Telephone Number</Text>
                 <TextInput
@@ -333,7 +294,6 @@ export default function HealthCenterFormModal() {
                   keyboardType="phone-pad"
                 />
               </View>
-              {/* Account number */}
               <View style={styles.inputGroup}>
                 <Text style={styles.label}>Account Number</Text>
                 <TextInput
@@ -343,13 +303,9 @@ export default function HealthCenterFormModal() {
                   placeholder=""
                 />
               </View>
-              {/* Installation date */}
               <View style={styles.inputGroup}>
                 <Text style={styles.label}>Installation Date (dd-mm-yyyy)</Text>
-                <TouchableOpacity
-                  onPress={() => setShowDatePicker(true)}
-                  style={styles.dateInputContainer}
-                >
+                <TouchableOpacity onPress={() => setShowDatePicker(true)} style={styles.dateInputContainer}>
                   <MaterialCommunityIcons name="calendar" size={20} color="#333" style={styles.dateIcon} />
                   <TextInput
                     style={[styles.input, { flex: 1, marginLeft: 8 }]}
@@ -369,7 +325,6 @@ export default function HealthCenterFormModal() {
                   />
                 )}
               </View>
-              {/* Serial */}
               <View style={styles.inputGroup}>
                 <Text style={styles.label}>Serial Number</Text>
                 <TextInput
@@ -379,7 +334,6 @@ export default function HealthCenterFormModal() {
                   placeholder=""
                 />
               </View>
-              {/* MAC */}
               <View style={styles.inputGroup}>
                 <Text style={styles.label}>MAC Address</Text>
                 <TextInput
@@ -393,6 +347,13 @@ export default function HealthCenterFormModal() {
 
             <View style={styles.card}>
               <Text style={styles.cardTitle}>Modem Images</Text>
+              <View style={styles.instructionImageContainer}>
+                <Image
+                  source={require('../assets/images/health-center.png')}
+                  style={styles.instructionImage}
+                />
+              </View>
+
               <View style={styles.inputGroup}>
                 <Text style={styles.label}>Modem Front Image</Text>
                 {!modemFrontImage && (
@@ -413,7 +374,7 @@ export default function HealthCenterFormModal() {
                         }}
                       >
                         <Image
-                          source={{ uri: modemFrontImage.localUri }}
+                          source={{ uri: modemFrontImage.uri }}
                           style={styles.imagePreview}
                         />
                       </TouchableOpacity>
@@ -456,7 +417,7 @@ export default function HealthCenterFormModal() {
                         }}
                       >
                         <Image
-                          source={{ uri: modemBackImage.localUri }}
+                          source={{ uri: modemBackImage.uri }}
                           style={styles.imagePreview}
                         />
                       </TouchableOpacity>
@@ -500,7 +461,7 @@ export default function HealthCenterFormModal() {
                             setImageModalVisible(true);
                           }}
                         >
-                          <Image source={{ uri: img.localUri }} style={styles.imagePreview} />
+                          <Image source={{ uri: img.uri }} style={styles.imagePreview} />
                         </TouchableOpacity>
                         <View style={{ flex: 1, marginLeft: 12 }}>
                           <Text style={styles.fileName} numberOfLines={1}>
@@ -532,7 +493,7 @@ export default function HealthCenterFormModal() {
         </SafeAreaView>
       </Modal>
 
-      {/* Fullscreen image modal */}
+ 
       <Modal
         visible={imageModalVisible}
         animationType="slide"
@@ -540,15 +501,12 @@ export default function HealthCenterFormModal() {
         onRequestClose={() => setImageModalVisible(false)}
       >
         <View style={styles.fullScreenModalContainer}>
-          <TouchableOpacity
-            style={styles.fullScreenCloseButton}
-            onPress={() => setImageModalVisible(false)}
-          >
+          <TouchableOpacity style={styles.fullScreenCloseButton} onPress={() => setImageModalVisible(false)}>
             <MaterialCommunityIcons name="close" size={30} color="#fff" />
           </TouchableOpacity>
           {selectedImageForModal && (
             <Image
-              source={{ uri: selectedImageForModal.localUri }}
+              source={{ uri: selectedImageForModal.uri }}
               style={styles.fullScreenImage}
               resizeMode="contain"
             />
@@ -622,6 +580,15 @@ const styles = StyleSheet.create({
     height: 50,
     width: '100%',
   },
+  instructionImageContainer: {
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  instructionImage: {
+    width: '100%',
+    height: 150,
+    resizeMode: 'contain',
+  },
   inputGroup: {
     marginBottom: 12,
   },
@@ -690,6 +657,7 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     resizeMode: 'cover',
   },
+  // Full screen modal styles
   fullScreenModalContainer: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.9)',
